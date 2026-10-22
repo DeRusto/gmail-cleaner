@@ -1,38 +1,94 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 language: "en-US"
-early_access: false # Set to true if you want to test beta features
+early_access: false
 
-# Customize the tone of CodeRabbit's responses
-tone_instructions: "Add reviews that make the product stronger. Focus on modular code, and provide good explanations of the issue and solution. Be concise but helpful."
+tone_instructions: "Be concise. Only comment on real bugs, security issues, and behaviour changes. Skip praise and style nits."
 
 reviews:
-  # General settings for a small team
-  profile: "chill"             # "chill" reduces noise; change to "assertive" for stricter reviews
-  high_level_summary: true     # Creates the "Summary" section at the top of the PR
-  # This customizes the summary and removes the default "Tip" footer
+  profile: "quiet"            # only the most important feedback (options: quiet, chill, assertive)
+  request_changes_workflow: false
+
+  # Keep the summary comment short
+  high_level_summary: true
   high_level_summary_instructions: >
     Provide a concise summary of the changes in bullet points.
     Do not include any 'Tips', footers, or instructions on how to customize settings.
-  poem: true                   # Fun little poem at the end (set to false if you hate fun)
-  review_status: true          # Updates the PR status check
-  collapse_walkthrough: false  # Keeps the "Walkthrough" expanded so you can see changes easily
+  poem: false
+  sequence_diagrams: false
+  related_prs: false
+  related_issues: false
+  suggested_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  changed_files_summary: true
+  estimate_code_review_effort: true
+  collapse_walkthrough: true
+  review_status: true
 
-  # Auto-review settings
   auto_review:
     enabled: true
-    drafts: false              # Won't review Draft PRs (saves noise)
-    base_branches: ["main"] # Only reviews PRs merging into these branches
+    drafts: false
+    base_branches: ["main"]
+    # Biggest win: don't re-review on every push. Comment "@coderabbitai review" when you want another pass.
+    auto_incremental_review: false
 
-  # Path filters to exclude files from review
+  # Docstring coverage is reported as a failing check on most PRs; turn it off
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+
   path_filters:
     - "!**/*.lock"
+    - "!uv.lock"
     - "!**/package-lock.json"
     - "!**/yarn.lock"
     - "!**/dist/**"
     - "!**/build/**"
+    - "!media/**"
+    - "!**/*.min.js"
+    - "!**/*.svg"
+    - "!**/*.png"
+
+  path_instructions:
+    - path: "tests/**"
+      instructions: >
+        Only flag tests that are wrong, flaky, or don't test what they claim.
+        No style, naming, refactoring, or "consider adding a test" comments.
+    - path: "**/*.md"
+      instructions: >
+        Only flag factually wrong instructions or commands. Ignore wording, formatting and lint rules.
+    - path: "app/**"
+      instructions: >
+        Focus on correctness, security (OAuth, tokens, auth, Gmail data loss), concurrency and error handling.
+        Skip nitpicks about naming, logging style, f-strings, and minor refactors.
+    - path: "static/**"
+      instructions: >
+        Focus on bugs, XSS and broken UI flows. Skip CSS/inline-style and formatting suggestions.
+
+  tools:
+    # Style-only linters that produced most of the nitpicks
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    yamllint:
+      enabled: false
+    biome:
+      enabled: false
+    # Keep the ones that catch real problems
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    zizmor:
+      enabled: true
+    hadolint:
+      enabled: true
+    actionlint:
+      enabled: true
 
 chat:
-  auto_reply: true             # Allows you to reply to CodeRabbit comments and have it answer back
+  auto_reply: true
 
 issue_enrichment:
   auto_enrich:
