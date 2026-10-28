@@ -70,20 +70,6 @@ GmailCleaner.Auth = {
                 return;
             }
 
-            if (status.web_auth_mode) {
-                const msg = `Docker detected! To sign in:
-
-1. Check Docker logs for the authorization URL:
-   docker logs cleanup_email-gmail-cleaner-1
-
-2. Copy the URL and open it in your browser
-
-3. After authorizing, you'll be signed in automatically.
-
-(Or generate token.json locally and mount it)`;
-                alert(msg);
-            }
-
             const signInResp = await fetch('/api/sign-in', { method: 'POST' });
             const signInResult = await signInResp.json();
 
@@ -93,11 +79,56 @@ GmailCleaner.Auth = {
                 return;
             }
 
+            // Show the authorization URL as a clickable link in the
+            // page, so nobody has to copy it out of the container logs.
+            // (A real click is a user gesture, so no popup blocker.)
+            const authUrl = await this.waitForAuthUrl();
+            if (authUrl) {
+                this.showAuthLink(authUrl);
+            }
+
             this.pollStatus();
         } catch (error) {
             alert('Error signing in: ' + error.message);
             this.resetSignInButton();
         }
+    },
+
+    async waitForAuthUrl() {
+        // The OAuth thread sets the pending URL just after sign-in
+        // starts; poll briefly until it appears.
+        for (let attempt = 0; attempt < 30; attempt++) {
+            try {
+                const resp = await fetch('/api/web-auth-status');
+                const status = await resp.json();
+                if (status.pending_auth_url) {
+                    return status.pending_auth_url;
+                }
+            } catch (error) {
+                console.error('Error polling web auth status:', error);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        return null;
+    },
+
+    showAuthLink(url) {
+        const signInBtn = document.getElementById('signInBtn');
+        if (!signInBtn) {
+            return;
+        }
+        let link = document.getElementById('googleAuthLink');
+        if (!link) {
+            link = document.createElement('a');
+            link.id = 'googleAuthLink';
+            link.className = 'btn btn-primary btn-large';
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = 'Continue with Google';
+            signInBtn.insertAdjacentElement('afterend', link);
+        }
+        link.href = url;
+        signInBtn.innerHTML = '<span>Waiting for authorization...</span>';
     },
 
     async pollStatus(attempts = 0) {
@@ -123,6 +154,10 @@ GmailCleaner.Auth = {
     },
 
     resetSignInButton() {
+        const link = document.getElementById('googleAuthLink');
+        if (link) {
+            link.remove();
+        }
         const signInBtn = document.getElementById('signInBtn');
         if (signInBtn) {
             signInBtn.disabled = false;
