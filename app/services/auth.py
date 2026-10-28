@@ -329,8 +329,15 @@ def get_gmail_service():
                         )
 
                     # If external port is different, manually handle OAuth flow
-                    # because run_local_server() constructs redirect URI from port parameter
-                    if redirect_port != settings.oauth_port:
+                    # because run_local_server() constructs redirect URI from port parameter.
+                    # Fork addition: when OAUTH_SCHEME=https, the callback is
+                    # served by the web UI itself (see app/api/oauth.py), so
+                    # the redirect URI is https://host/path and no standalone
+                    # callback server is started.
+                    use_ui_callback = (
+                        is_web_auth_mode() and settings.oauth_scheme == "https"
+                    )
+                    if redirect_port != settings.oauth_port or use_ui_callback:
                         # Validate oauth_host is not empty
                         if not settings.oauth_host or not settings.oauth_host.strip():
                             raise ValueError(
@@ -338,13 +345,22 @@ def get_gmail_service():
                                 "Please set OAUTH_HOST environment variable."
                             )
 
-                        # Construct redirect URI using external port
-                        redirect_uri = f"http://{settings.oauth_host}:{redirect_port}/"
-                        flow.redirect_uri = redirect_uri
-                        logger.info(
-                            f"Using custom redirect URI {redirect_uri} "
-                            f"(internal port: {settings.oauth_port}, external port: {redirect_port})"
-                        )
+                        if use_ui_callback:
+                            # Construct redirect URI served by the web UI
+                            redirect_uri = f"https://{settings.oauth_host}{settings.oauth_callback_path}"
+                            flow.redirect_uri = redirect_uri
+                            logger.info(
+                                f"Using UI callback redirect URI {redirect_uri} "
+                                f"(served by the web UI, no standalone callback server)"
+                            )
+                        else:
+                            # Construct redirect URI using external port
+                            redirect_uri = f"http://{settings.oauth_host}:{redirect_port}/"
+                            flow.redirect_uri = redirect_uri
+                            logger.info(
+                                f"Using custom redirect URI {redirect_uri} "
+                                f"(internal port: {settings.oauth_port}, external port: {redirect_port})"
+                            )
 
                         # Manually handle OAuth flow with custom redirect URI
                         authorization_url, oauth_state = flow.authorization_url(
@@ -373,10 +389,22 @@ def get_gmail_service():
                         if is_web_auth_mode():
                             state.pending_auth_url["url"] = authorization_url
 
-                        # Create a simple HTTP server to handle the callback
-                        callback_event = threading.Event()
-                        callback_lock = threading.Lock()
-                        callback_data: dict = {"code": None, "error": None}
+                        # Callback result plumbing: the web-UI route shares
+                        # state with this thread when OAUTH_SCHEME=https;
+                        # otherwise a standalone server on the OAuth port
+                        # feeds a local event.
+                        if use_ui_callback:
+                            callback_event = state.oauth_callback_event
+                            callback_lock = state.oauth_callback_lock
+                            callback_data = state.oauth_callback_data
+                            with callback_lock:
+                                callback_data["code"] = None
+                                callback_data["error"] = None
+                                callback_event.clear()
+                        else:
+                            callback_event = threading.Event()
+                            callback_lock = threading.Lock()
+                            callback_data: dict = {"code": None, "error": None}
                         auth_code = None
                         error_message = None
 
@@ -391,27 +419,14 @@ def get_gmail_service():
                             )
 
                         # Start the callback server with error handling
+                        # (skipped for UI callbacks: the web UI serves it)
                         server = None
                         try:
-                            try:
+                            if not use_ui_callback:
                                 server = HTTPServer(
                                     (bind_address, settings.oauth_port),
                                     handler_factory,
                                 )
-                            except OSError as e:
-                                # Check for port already in use error (platform-independent)
-                                error_str = str(e).lower()
-                                if (
-                                    "address already in use" in error_str
-                                    or (
-                                        hasattr(e, "errno") and e.errno in (98, 10048)
-                                    )  # Linux: 98, Windows: 10048
-                                ):
-                                    raise OSError(
-                                        f"Port {settings.oauth_port} is already in use. "
-                                        "Please stop any other service using this port or change the port configuration."
-                                    ) from e
-                                raise
 
                             # Print authorization URL
                             print(
@@ -432,7 +447,8 @@ def get_gmail_service():
                             start_time = time.time()
 
                             # Set socket timeout to allow periodic timeout checks
-                            server.timeout = 1.0  # 1 second timeout for handle_request
+                            if server is not None:
+                                server.timeout = 1.0  # 1 second timeout for handle_request
 
                             while not callback_event.is_set():
                                 elapsed = time.time() - start_time
@@ -442,21 +458,22 @@ def get_gmail_service():
                                         "Please try signing in again."
                                     )
 
-                                try:
-                                    server.handle_request()
-                                except Exception as e:
-                                    logger.error(
-                                        f"Error handling OAuth callback request: {e}",
-                                        exc_info=True,
-                                    )
-                                    # Continue waiting unless it's a critical error
-                                    error_str = str(e).lower()
-                                    if "address already in use" in error_str or (
-                                        isinstance(e, OSError)
-                                        and hasattr(e, "errno")
-                                        and e.errno in (98, 10048)
-                                    ):
-                                        raise
+                                if server is not None:
+                                    try:
+                                        server.handle_request()
+                                    except Exception as e:
+                                        logger.error(
+                                            f"Error handling OAuth callback request: {e}",
+                                            exc_info=True,
+                                        )
+                                        # Continue waiting unless it's a critical error
+                                        error_str = str(e).lower()
+                                        if "address already in use" in error_str or (
+                                            isinstance(e, OSError)
+                                            and hasattr(e, "errno")
+                                            and e.errno in (98, 10048)
+                                        ):
+                                            raise
 
                                 # Wait for callback event with short timeout to allow periodic checks
                                 if not callback_event.wait(timeout=0.1):

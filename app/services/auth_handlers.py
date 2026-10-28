@@ -14,6 +14,53 @@ from app.core import state
 logger = logging.getLogger(__name__)
 
 
+def verify_oauth_state(query_params: dict) -> str | None:
+    """Validate the OAuth state parameter against the stored state.
+
+    Returns an error message if validation fails (and clears the stored
+    state), or None if the state is valid. Shared by the standalone
+    callback server and the web-UI callback route so the CSRF check
+    cannot drift between them.
+    """
+    with state.oauth_state_lock:
+        stored_state = state.oauth_state.get("state")
+
+    incoming_state = None
+    if "state" in query_params:
+        state_list = query_params["state"]
+        if state_list and len(state_list) > 0:
+            incoming_state = state_list[0]
+
+    if stored_state is None:
+        logger.error(
+            "OAuth callback received but no stored state found - possible CSRF attack or state expired"
+        )
+        with state.oauth_state_lock:
+            state.oauth_state["state"] = None
+        return "OAuth callback received but no stored state found - possible CSRF attack or state expired"
+
+    if incoming_state is None:
+        logger.error(
+            "OAuth callback missing state parameter - possible CSRF attack or malformed request"
+        )
+        with state.oauth_state_lock:
+            state.oauth_state["state"] = None
+        return "OAuth callback missing state parameter - possible CSRF attack or malformed request"
+
+    if incoming_state != stored_state:
+        logger.error(
+            "OAuth state mismatch - possible CSRF attack. "
+            "Expected: %s..., Received: %s...",
+            stored_state[:20] if len(stored_state) > 20 else stored_state,
+            incoming_state[:20] if len(incoming_state) > 20 else incoming_state,
+        )
+        with state.oauth_state_lock:
+            state.oauth_state["state"] = None
+        return "OAuth state mismatch - possible CSRF attack"
+
+    return None
+
+
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP request handler for OAuth2 callback processing.
 
@@ -57,70 +104,12 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
 
-        # Verify OAuth state for CSRF protection
-        with state.oauth_state_lock:
-            stored_state = state.oauth_state.get("state")
-        incoming_state = None
-        if "state" in query_params:
-            state_list = query_params["state"]
-            if state_list and len(state_list) > 0:
-                incoming_state = state_list[0]
-
-        # Verify state matches stored state
-        if stored_state is None:
-            logger.error(
-                "OAuth callback received but no stored state found - possible CSRF attack or state expired"
-            )
+        # Verify OAuth state for CSRF protection (shared with the web-UI
+        # callback route so the check cannot drift between them)
+        state_error = verify_oauth_state(query_params)
+        if state_error is not None:
             with self.callback_lock:
-                self.callback_data["error"] = (
-                    "OAuth callback received but no stored state found - possible CSRF attack or state expired"
-                )
-                # Clear state on security error
-                with state.oauth_state_lock:
-                    state.oauth_state["state"] = None
-                self.callback_event.set()
-            self.send_response(403)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"<html><body><h1>Security Error</h1><p>Authentication state mismatch. Please try signing in again.</p></body></html>"
-            )
-            return
-
-        if incoming_state is None:
-            logger.error(
-                "OAuth callback missing state parameter - possible CSRF attack or malformed request"
-            )
-            with self.callback_lock:
-                self.callback_data["error"] = (
-                    "OAuth callback missing state parameter - possible CSRF attack or malformed request"
-                )
-                # Clear state on security error
-                with state.oauth_state_lock:
-                    state.oauth_state["state"] = None
-                self.callback_event.set()
-            self.send_response(403)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"<html><body><h1>Security Error</h1><p>Authentication state mismatch. Please try signing in again.</p></body></html>"
-            )
-            return
-
-        if incoming_state != stored_state:
-            logger.error(
-                "OAuth state mismatch - possible CSRF attack. "
-                "Expected: %s..., Received: %s...",
-                stored_state[:20] if len(stored_state) > 20 else stored_state,
-                incoming_state[:20] if len(incoming_state) > 20 else incoming_state,
-            )
-            with self.callback_lock:
-                self.callback_data["error"] = (
-                    "OAuth state mismatch - possible CSRF attack"
-                )
-                # Clear state on security error to prevent reuse
-                with state.oauth_state_lock:
-                    state.oauth_state["state"] = None
+                self.callback_data["error"] = state_error
                 self.callback_event.set()
             self.send_response(403)
             self.send_header("Content-type", "text/html")

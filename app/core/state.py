@@ -69,6 +69,13 @@ class AppState:
         self.oauth_state: dict = {"state": None}
         self.oauth_state_lock: threading.Lock = threading.Lock()
 
+        # Shared OAuth callback result for UI-served callbacks
+        # (reverse-proxy mode: the web-UI route writes here, the OAuth
+        # thread in auth.py waits on it)
+        self.oauth_callback_event: threading.Event = threading.Event()
+        self.oauth_callback_lock: threading.Lock = threading.Lock()
+        self.oauth_callback_data: dict = {"code": None, "error": None}
+
         # Label operation state
         self.label_operation_status: dict = {
             "progress": 0,

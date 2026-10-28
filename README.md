@@ -311,6 +311,27 @@ If you're accessing via a **custom domain** (e.g., `gmail.example.com`) instead 
    - The **Authorized redirect URI** in Google Cloud must be `http://YOUR_DOMAIN:8767/` (HTTP, not HTTPS) or use the external port if mapped
    - Proxy both port 8766 (app) and port 8767 (OAuth callback) through your reverse proxy
 
+### Callback served by the web UI (fork addition: no extra port)
+
+If your reverse proxy only serves one hostname on standard HTTPS (e.g. Pangolin), proxying a second callback port is not possible. This fork adds a UI-served callback:
+
+1. **Update Google Cloud Console**:
+   - Go to **Clients** → Your OAuth client → **Authorized redirect URIs**
+   - Add: `https://YOUR_DOMAIN/oauth/callback`
+
+2. **Update docker-compose.yml**:
+
+   ```yaml
+   environment:
+     - WEB_AUTH=true
+     - OAUTH_HOST=gmail.example.com  # Just the hostname - NO http:// or https://
+     - OAUTH_SCHEME=https
+     # Optional: change the callback path (default /oauth/callback)
+     # - OAUTH_CALLBACK_PATH=/oauth/callback
+   ```
+
+   With `OAUTH_SCHEME=https`, the app serves the OAuth callback on the web UI itself, so the reverse proxy only needs to route the app (port 8766). The standalone callback server on port 8767 is not started. Omitting `OAUTH_SCHEME` (or leaving it `http`) keeps the upstream behavior unchanged.
+
 ## Troubleshooting
 
 ### OAuth & Authentication Issues

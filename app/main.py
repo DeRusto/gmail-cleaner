@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.core import settings
-from app.api import status_router, actions_router
+from app.api import status_router, actions_router, oauth_router
 
 templates = Jinja2Templates(directory="templates")
 
@@ -140,6 +140,7 @@ def create_app() -> FastAPI:
     # Include API routers
     app.include_router(status_router)
     app.include_router(actions_router)
+    app.include_router(oauth_router)
 
     # HTML routes
     @app.get("/", include_in_schema=False)

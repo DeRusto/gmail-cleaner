@@ -32,6 +32,14 @@ class Settings(BaseSettings):
         default="localhost",
         description="Custom host for OAuth redirect (e.g., your domain or IP)",
     )
+    oauth_scheme: str = Field(
+        default="http",
+        description="Scheme for OAuth redirect URI served by the web UI (set to https behind a TLS reverse proxy)",
+    )
+    oauth_callback_path: str = Field(
+        default="/oauth/callback",
+        description="Path on the web UI server that handles the OAuth callback (used when oauth_scheme is https)",
+    )
 
     @field_validator("web_auth", mode="before")
     @classmethod
